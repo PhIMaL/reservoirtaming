@@ -1,31 +1,50 @@
 from flax import linen as nn
+from functools import partial
+from flax.linen.initializers import zeros
 import jax.numpy as jnp
-from typing import Callable, Tuple
+from typing import Tuple
+
+# Shortcut for scan to run flax model
+scan = partial(
+    nn.transforms.scan, variable_broadcast="params", split_rngs={"params": False}
+)
 
 
 class GenericEchoState(nn.Module):
-    reservoir: nn.Module
-    act_fn: Callable
     n_reservoir: int
+    reservoir_type: nn.Module
     reservoir_args: Tuple
-    act_fn_args: Tuple
 
-    @nn.compact
-    def __call__(self, inputs):
-        # Initializing internal reservoir state
-        is_initialized = self.has_variable("reservoir", "state")
-        reservoir_state = self.variable(
-            "reservoir", "state", lambda n: jnp.zeros((n,)), self.n_reservoir
-        )
+    n_out: int
+    output_layer_type: nn.Module
+    output_layer_args: Tuple
 
-        # Calculating new state
-        state = reservoir_state.value
-        z = self.reservoir(self.n_reservoir, *self.reservoir_args)(inputs, state)
-        updated_state = self.act_fn(z, state, *self.act_fn_args)
+    def setup(self):
+        self.reservoir = self.reservoir_type(self.n_reservoir, *self.reservoir_args)
+        self.output_layer = self.output_layer_type(self.n_out, *self.output_layer_args)
 
-        # Updating internal state
-        if is_initialized:
-            reservoir_state.value = updated_state
+    def __call__(self, state, initial, n_steps=1):
+        return self.predict((state, initial), jnp.arange(n_steps))
 
-        return updated_state
+    @scan
+    def predict(self, carry, _):
+        state, previous_prediction = carry
+
+        # Getting new reservoir state
+        updated_state = self.reservoir(state, previous_prediction)
+
+        # Calculating output layer
+        prediction = self.output_layer(updated_state, previous_prediction)
+        return (updated_state, prediction), prediction
+
+    @scan
+    def run_reservoir(self, state, inputs):
+        # Getting new reservoir state
+        updated_state = self.reservoir(state, inputs)
+
+        # Scan; first output gets carried, second gets saved
+        return updated_state, updated_state
+
+    def initialize_state(self, rng, n_reservoir, init_fn=zeros):
+        return self.reservoir_type.initialize_state(rng, n_reservoir, init_fn)
 
