@@ -49,7 +49,7 @@ class Log2Padding(nn.Module):
 
     @nn.compact
     def __call__(self, X):
-        n_in = X.shape[-1]
-        next_power = int(2 ** jnp.ceil(jnp.log2(n_in)))  # finding next power of 2
-        n_padding = int(next_power - n_in)
-        return jnp.concatenate([X, self.padding_fn(*X.shape[:-1], n_padding)], axis=-1)
+        n_in = X.shape[-1]  # finding next power of 2
+        next_power = (2 ** np.ceil(np.log2(n_in))).astype(np.int32)
+        n_padding = (next_power - n_in).astype(np.int32)
+        return jnp.concatenate([X, self.padding_fn((1, n_padding))], axis=-1)

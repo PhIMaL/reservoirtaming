@@ -1,9 +1,10 @@
+from types import new_class
 from typing import Callable, Tuple
 from flax import linen as nn
 from flax.linen.initializers import normal, zeros
 from .activation import leaky_erf
 import jax.numpy as jnp
-from .utils import Diagonal, HadamardTransform
+from .utils import Diagonal, HadamardTransform, Log2Padding
 import numpy as np
 
 
@@ -42,8 +43,6 @@ class RandomReservoir(nn.Module):
 
 class StructuredTransform(nn.Module):
     n_reservoir: int
-    n_input: int
-    n_layers: int = 3
 
     input_scale: float = 0.4
     res_scale: float = 0.9
@@ -52,34 +51,21 @@ class StructuredTransform(nn.Module):
     activation_fn: Callable = leaky_erf
     activation_fn_args: Tuple = (1.0,)
 
-    def setup(self):
-        # Padding
-        self.n_hadamard = (
-            2 ** np.ceil(np.log2(self.n_input + self.n_reservoir))
-        ).astype(
-            int
-        )  # finding next power of 2
-        self.n_padding = (self.n_hadamard - self.n_reservoir - self.n_input).astype(int)
-        self.padding = jnp.zeros((1, self.n_padding))
+    n_layers: int = 3
 
-        # Layers
-        self.diagonal_layers = [Diagonal() for _ in jnp.arange(self.n_layers)]
-        self.hadamard = HadamardTransform(self.n_hadamard)
-        self.bias = self.param(
-            "bias", normal(stddev=self.bias_scale), (self.n_reservoir,)
-        )
-
+    @nn.compact
     def __call__(self, state, inputs):
-        X = jnp.concatenate(
-            [self.res_scale * state, self.input_scale * inputs, self.padding], axis=1
-        )
-        for diagonal in self.diagonal_layers:
-            X = self.hadamard(diagonal(X))
+        X = jnp.concatenate([self.res_scale * state, self.input_scale * inputs], axis=1)
+        X = Log2Padding()(X)  # automatically pad to next power of 2
+        hadamard = HadamardTransform(X.shape[-1])
+        for _ in jnp.arange(self.n_layers):
+            X = hadamard(Diagonal()(X))
 
+        bias = self.param("bias", normal(stddev=self.bias_scale), (self.n_reservoir,))
         # TODO: check if self.n_hadamard is correct; comes from code from paper
-        z = X[:, : self.n_reservoir] / self.n_hadamard + self.bias
-        z = self.activation_fn(z, state, *self.activation_fn_args)
-        return z
+        X = X[:, : self.n_reservoir] / X.shape[-1] + bias
+        X = self.activation_fn(X, state, *self.activation_fn_args)
+        return X
 
     @staticmethod
     def initialize_state(rng, n_reservoir, init_fn=zeros):
