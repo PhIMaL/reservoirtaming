@@ -4,7 +4,7 @@ from flax import linen as nn
 from flax.linen.initializers import normal, zeros
 from .activation import leaky_erf
 import jax.numpy as jnp
-from .utils import Diagonal, HadamardTransform, Log2Padding
+from .utils import Diagonal, HadamardTransform, FastHadamardTransform, Log2Padding
 import numpy as np
 
 
@@ -58,6 +58,37 @@ class StructuredTransform(nn.Module):
         X = jnp.concatenate([self.res_scale * state, self.input_scale * inputs], axis=1)
         X = Log2Padding()(X)  # automatically pad to next power of 2
         hadamard = HadamardTransform(X.shape[-1])
+        for _ in jnp.arange(self.n_layers):
+            X = hadamard(Diagonal()(X))
+
+        bias = self.param("bias", normal(stddev=self.bias_scale), (self.n_reservoir,))
+        # TODO: check if self.n_hadamard is correct; comes from code from paper
+        X = X[:, : self.n_reservoir] / X.shape[-1] + bias
+        X = self.activation_fn(X, state, *self.activation_fn_args)
+        return X
+
+    @staticmethod
+    def initialize_state(rng, n_reservoir, init_fn=zeros):
+        return init_fn(rng, (1, n_reservoir))
+
+
+class FastStructuredTransform(nn.Module):
+    n_reservoir: int
+
+    input_scale: float = 0.4
+    res_scale: float = 0.9
+    bias_scale: float = 0.1
+
+    activation_fn: Callable = leaky_erf
+    activation_fn_args: Tuple = (1.0,)
+
+    n_layers: int = 3
+
+    @nn.compact
+    def __call__(self, state, inputs):
+        X = jnp.concatenate([self.res_scale * state, self.input_scale * inputs], axis=1)
+        X = Log2Padding()(X)  # automatically pad to next power of 2
+        hadamard = FastHadamardTransform()
         for _ in jnp.arange(self.n_layers):
             X = hadamard(Diagonal()(X))
 

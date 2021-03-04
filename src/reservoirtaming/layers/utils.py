@@ -2,6 +2,7 @@ from flax import linen as nn
 from jax import random, numpy as jnp
 import numpy as np
 from typing import Callable
+from functools import reduce
 
 
 class Diagonal(nn.Module):
@@ -38,10 +39,11 @@ def hadamard(normalized=True, dtype=jnp.float32):
 class HadamardTransform(nn.Module):
     n_hadamard: int
 
-    @nn.compact
+    def setup(self):
+        self.H = hadamard()(None, (self.n_hadamard,))
+
     def __call__(self, X):
-        z = nn.Dense(self.n_hadamard, kernel_init=hadamard(), use_bias=False)(X)
-        return z
+        return jnp.dot(X, self.H)
 
 
 class Log2Padding(nn.Module):
@@ -53,3 +55,17 @@ class Log2Padding(nn.Module):
         next_power = (2 ** np.ceil(np.log2(n_in))).astype(np.int32)
         n_padding = (next_power - n_in).astype(np.int32)
         return jnp.concatenate([X, self.padding_fn((1, n_padding))], axis=-1)
+
+
+class FastHadamardTransform(nn.Module):
+    @nn.compact
+    def __call__(self, X):
+        def update(z, m):
+            x = z[:, ::2, :]
+            y = z[:, 1::2, :]
+            return jnp.concatenate((x + y, x - y), axis=-1)
+
+        m_max = np.log2(X.shape[-1])
+        X = jnp.expand_dims(X, -1)
+        X = reduce(update, np.arange(m_max), X)
+        return X.squeeze(-2) / 2 ** (m_max / 2)
