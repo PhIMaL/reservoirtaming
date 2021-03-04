@@ -4,6 +4,7 @@ from flax.linen.initializers import normal, zeros
 from .activation import leaky_erf
 import jax.numpy as jnp
 from .utils import Diagonal, HadamardTransform
+import numpy as np
 
 
 class RandomReservoir(nn.Module):
@@ -53,10 +54,12 @@ class StructuredTransform(nn.Module):
 
     def setup(self):
         # Padding
-        self.n_hadamard = int(
-            2 ** jnp.ceil(jnp.log2(self.n_input + self.n_reservoir))
+        self.n_hadamard = (
+            2 ** np.ceil(np.log2(self.n_input + self.n_reservoir))
+        ).astype(
+            int
         )  # finding next power of 2
-        self.n_padding = int(self.n_hadamard - self.n_reservoir - self.n_input)
+        self.n_padding = (self.n_hadamard - self.n_reservoir - self.n_input).astype(int)
         self.padding = jnp.zeros((1, self.n_padding))
 
         # Layers
